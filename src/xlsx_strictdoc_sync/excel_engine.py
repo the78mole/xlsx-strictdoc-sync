@@ -259,16 +259,16 @@ class ExcelEngine:
         # In legacy mode, uid_col etc. are A1 column letters
         uid_cidx = column_index_from_string(mapping.uid_col)
 
+        def _legacy_col_resolver(col_letter: str) -> int | None:
+            if not col_letter:
+                return None
+            return column_index_from_string(col_letter)
+
         requirements: list[Requirement] = []
         for row_idx in range(2, ws.max_row + 1):  # row 1 is header
             uid_val = ws.cell(row_idx, uid_cidx).value
             if not uid_val:
                 continue
-
-            def col_resolver(col_letter: str, _ws: Worksheet = ws, _row: int = row_idx) -> int | None:
-                if not col_letter:
-                    return None
-                return column_index_from_string(col_letter)
 
             req = self._build_requirement_from_row(
                 ws=ws,
@@ -276,7 +276,7 @@ class ExcelEngine:
                 headers={},
                 mapping=mapping,
                 uid=str(uid_val),
-                col_resolver=col_resolver,
+                col_resolver=_legacy_col_resolver,
             )
             requirements.append(req)
         return requirements
