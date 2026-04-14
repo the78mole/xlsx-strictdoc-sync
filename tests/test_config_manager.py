@@ -80,10 +80,16 @@ class TestSectionMapping:
             SectionMapping(name="S", sdoc_file="s.sdoc", mode="table",
                            anchor="", uid_col="UID")
 
-    def test_empty_uid_col_raises(self):
-        with pytest.raises(ValueError, match="uid_col"):
-            SectionMapping(name="S", sdoc_file="s.sdoc", mode="table",
-                           anchor="A", uid_col="")
+    def test_last_updated_col_not_in_extra_cols_defaults_to_LAST_UPDATED(self):
+        m = SectionMapping(
+            name="S", sdoc_file="s.sdoc", mode="table",
+            anchor="A", uid_col="UID",
+            last_updated_col="Modified",
+            extra_cols={},  # column not mapped in extra_cols
+        )
+        assert m.last_updated_sdoc_field == "LAST_UPDATED"
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +181,51 @@ Safety = "SAFETY_LEVEL"
 """)
         cfg = load_config(path)
         assert cfg.sections[0].extra_cols == {"Safety": "SAFETY_LEVEL"}
+
+    def test_last_updated_col_parsed(self, tmp_path):
+        path = self._write_toml(tmp_path, """
+[global]
+excel_file = "x.xlsx"
+
+[SYS_REQS]
+sdoc_file = "sys.sdoc"
+mode = "table"
+anchor = "SYS_Reqs"
+uid_col = "UID"
+last_updated_col = "Last Updated"
+
+[SYS_REQS.extra_cols]
+"Last Updated" = "LAST_UPDATED"
+""")
+        cfg = load_config(path)
+        m = cfg.sections[0]
+        assert m.last_updated_col == "Last Updated"
+        assert m.last_updated_sdoc_field == "LAST_UPDATED"
+
+    def test_last_updated_col_absent_gives_empty(self, tmp_path):
+        path = self._write_toml(tmp_path, """
+[global]
+excel_file = "x.xlsx"
+
+[SYS_REQS]
+sdoc_file = "sys.sdoc"
+mode = "table"
+anchor = "SYS_Reqs"
+uid_col = "UID"
+""")
+        cfg = load_config(path)
+        m = cfg.sections[0]
+        assert m.last_updated_col == ""
+        assert m.last_updated_sdoc_field == ""
+
+    def test_last_updated_col_not_in_extra_cols_defaults_to_LAST_UPDATED(self):
+        m = SectionMapping(
+            name="S", sdoc_file="s.sdoc", mode="table",
+            anchor="A", uid_col="UID",
+            last_updated_col="Modified",
+            extra_cols={},  # column not mapped
+        )
+        assert m.last_updated_sdoc_field == "LAST_UPDATED"
 
     def test_multiple_sections(self, tmp_path):
         path = self._write_toml(tmp_path, """

@@ -25,6 +25,7 @@ one `.sdoc` file and one Excel table or sheet.
 | `grammar_tag` | | `"REQUIREMENT"` | SDoc grammar element tag |
 | `sync_direction` | | `"excel_to_sdoc"` | Default sync direction for this section |
 | `conflict_resolution` | | `"excel"` | Tiebreaker when `sync_direction = "both"` and no field override applies: `"excel"` or `"sdoc"` |
+| `last_updated_col` | | `""` | Excel column header/letter that stores a per-row last-updated timestamp. When set and `sync_direction = "both"`, the side with the newer timestamp wins for fields without an explicit `field_directions` entry. Falls back to `conflict_resolution` when timestamps are equal, missing, or unparseable. |
 
 ### `[SECTION_NAME.extra_cols]`
 
@@ -50,7 +51,39 @@ STATEMENT   = "excel_to_sdoc"   # Excel is authoritative for statements
 SAFETY_LEVEL = "sdoc_to_excel"  # Safety classification managed in SDoc
 ```
 
-## Access modes
+### Timestamp-based sync direction (`last_updated_col`)
+
+When `last_updated_col` is set and `sync_direction = "both"`, the sync engine
+compares the per-row timestamps stored in that column and lets the **more
+recently updated side win** for every field that has no explicit
+`field_directions` entry.
+
+**Priority order** (highest → lowest):
+
+1. `field_directions[FIELD]` — explicit per-field override always wins.
+2. `last_updated_col` timestamp comparison — newer side wins.
+3. `conflict_resolution` — static tiebreaker (`"excel"` or `"sdoc"`), used
+   when timestamps are equal, missing, or cannot be parsed.
+
+**Setup:** declare the timestamp column in `extra_cols` so it is mapped to a
+SDoc grammar field, then reference the Excel column header in `last_updated_col`:
+
+```toml
+[SYS_REQS]
+sync_direction   = "both"
+last_updated_col = "Last Updated"   # Excel column header
+
+[SYS_REQS.extra_cols]
+"Last Updated" = "LAST_UPDATED"     # Excel header → SDoc field name
+```
+
+Timestamps are compared as `datetime.fromisoformat()` values.  Plain
+ISO-8601 date strings (`2024-06-15`) and full datetime strings
+(`2024-06-15T10:30:00`) are both supported.  If parsing fails, a
+lexicographic string comparison is used as a fallback (which still gives
+correct ordering for ISO date strings).
+
+
 
 ### Table mode (`mode = "table"`)
 

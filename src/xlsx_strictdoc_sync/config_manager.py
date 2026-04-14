@@ -73,6 +73,25 @@ class SectionMapping:
                 [SYS_REQS.field_directions]
                 TITLE     = "sdoc_to_excel"    # SDoc is authoritative for titles
                 STATEMENT = "excel_to_sdoc"    # Excel is authoritative for text
+
+        last_updated_col: Optional Excel column header (table mode) or column
+            letter (legacy mode) that stores a *last-updated* timestamp for
+            each requirement row.  When set and ``sync_direction="both"``, the
+            side with the **newer** timestamp wins for any field that has no
+            explicit :attr:`field_directions` entry.  Falls back to
+            :attr:`conflict_resolution` when both timestamps are equal,
+            missing, or cannot be parsed.
+
+            The SDoc grammar field name is resolved by looking up
+            *last_updated_col* in :attr:`extra_cols`; if not found there,
+            ``"LAST_UPDATED"`` is used.
+
+            Example in TOML::
+
+                last_updated_col = "Last Updated"   # Excel column header
+
+                [SYS_REQS.extra_cols]
+                Last Updated = "LAST_UPDATED"
     """
 
     name: str
@@ -88,6 +107,20 @@ class SectionMapping:
     sync_direction: str = DIRECTION_EXCEL_TO_SDOC
     conflict_resolution: str = CONFLICT_EXCEL
     field_directions: dict[str, str] = field(default_factory=dict)
+    last_updated_col: str = ""
+
+    @property
+    def last_updated_sdoc_field(self) -> str:
+        """Return the SDoc field name for the last-updated column.
+
+        Looks up :attr:`last_updated_col` in :attr:`extra_cols` to find the
+        corresponding SDoc grammar field name.  Falls back to
+        ``"LAST_UPDATED"`` when the column is not mapped in ``extra_cols``.
+        Returns an empty string when :attr:`last_updated_col` is not set.
+        """
+        if not self.last_updated_col:
+            return ""
+        return self.extra_cols.get(self.last_updated_col, "LAST_UPDATED")
 
     def __post_init__(self) -> None:
         if self.mode not in ("table", "legacy"):
@@ -189,6 +222,7 @@ def load_config(path: str | Path) -> Config:
                 sync_direction=section_data.get("sync_direction", DIRECTION_EXCEL_TO_SDOC),
                 conflict_resolution=section_data.get("conflict_resolution", CONFLICT_EXCEL),
                 field_directions=field_directions,
+                last_updated_col=section_data.get("last_updated_col", ""),
             )
         except KeyError as exc:
             raise KeyError(f"[{section_name}] Missing required key: {exc}") from exc
@@ -234,6 +268,7 @@ def generate_config_template(
             "# grammar_tag     = \"REQUIREMENT\"",
             "# sync_direction  = \"excel_to_sdoc\"  # excel_to_sdoc | sdoc_to_excel | both",
             "# conflict_resolution = \"excel\"      # excel | sdoc (tiebreaker for 'both' mode)",
+            "# last_updated_col = \"Last Updated\"  # column that stores per-row timestamps",
             "",
             f"# [{sname}.extra_cols]",
             "# Safety_Level = \"SAFETY_LEVEL\"",

@@ -8,6 +8,7 @@ from xlsx_strictdoc_sync.config_manager import SectionMapping
 from xlsx_strictdoc_sync.models import Requirement
 from xlsx_strictdoc_sync.sync_engine import (
     SyncResult,
+    _compare_timestamps,
     _requirements_equal,
     _resolve_direction,
     compute_sync,
@@ -252,6 +253,122 @@ class TestComputeSyncBoth:
         assert ex_upd == []
         assert sdoc_upd == []
         assert result.skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# _compare_timestamps
+# ---------------------------------------------------------------------------
+
+
+class TestCompareTimestamps:
+    def test_excel_newer_iso(self):
+        assert _compare_timestamps("2024-06-15T10:00:00", "2024-06-14T10:00:00") is True
+
+    def test_sdoc_newer_iso(self):
+        assert _compare_timestamps("2024-06-13", "2024-06-15") is False
+
+    def test_equal_timestamps(self):
+        assert _compare_timestamps("2024-01-01", "2024-01-01") is None
+
+    def test_both_empty(self):
+        assert _compare_timestamps("", "") is None
+
+    def test_only_excel_has_timestamp(self):
+        assert _compare_timestamps("2024-01-01", "") is True
+
+    def test_only_sdoc_has_timestamp(self):
+        assert _compare_timestamps("", "2024-01-01") is False
+
+    def test_unparseable_falls_back_to_lexicographic(self):
+        # "2024-12-01" > "2024-06-01" lexicographically → Excel newer
+        assert _compare_timestamps("2024-12-01", "2024-06-01") is True
+
+    def test_both_unparseable_equal(self):
+        assert _compare_timestamps("bad-date", "bad-date") is None
+
+
+# ---------------------------------------------------------------------------
+# compute_sync – last_updated timestamp-based direction
+# ---------------------------------------------------------------------------
+
+
+def _mapping_with_ts(**kwargs) -> SectionMapping:
+    """Build a mapping with last_updated_col configured."""
+    defaults = dict(
+        name="SYS_REQS",
+        sdoc_file="sys.sdoc",
+        mode="table",
+        anchor="SYS_Reqs",
+        uid_col="UID",
+        title_col="Title",
+        statement_col="Statement",
+        sync_direction="both",
+        conflict_resolution="excel",  # static fallback
+        field_directions={},
+        extra_cols={"Last Updated": "LAST_UPDATED"},
+        last_updated_col="Last Updated",
+    )
+    defaults.update(kwargs)
+    return SectionMapping(**defaults)
+
+
+class TestComputeSyncLastUpdated:
+    def test_excel_newer_wins(self):
+        """Excel has a newer timestamp → Excel value propagates to SDoc."""
+        e = [_req("SYS-001", statement="Excel stmt",
+                  custom_fields={"LAST_UPDATED": "2024-06-15"})]
+        s = [_req("SYS-001", statement="SDoc stmt",
+                  custom_fields={"LAST_UPDATED": "2024-06-10"})]
+        _, sdoc_upd, _ = compute_sync(e, s, _mapping_with_ts())
+        assert sdoc_upd[0].statement == "Excel stmt"
+
+    def test_sdoc_newer_wins(self):
+        """SDoc has a newer timestamp → SDoc value propagates to Excel."""
+        e = [_req("SYS-001", statement="Excel stmt",
+                  custom_fields={"LAST_UPDATED": "2024-06-10"})]
+        s = [_req("SYS-001", statement="SDoc stmt",
+                  custom_fields={"LAST_UPDATED": "2024-06-15"})]
+        ex_upd, _, _ = compute_sync(e, s, _mapping_with_ts())
+        assert ex_upd[0].statement == "SDoc stmt"
+
+    def test_equal_timestamps_fall_back_to_conflict_resolution(self):
+        """Equal timestamps → fall back to conflict_resolution='excel'."""
+        ts = "2024-06-10"
+        e = [_req("SYS-001", statement="Excel stmt",
+                  custom_fields={"LAST_UPDATED": ts})]
+        s = [_req("SYS-001", statement="SDoc stmt",
+                  custom_fields={"LAST_UPDATED": ts})]
+        _, sdoc_upd, _ = compute_sync(e, s, _mapping_with_ts(conflict_resolution="excel"))
+        assert sdoc_upd[0].statement == "Excel stmt"
+
+    def test_missing_timestamps_fall_back_to_conflict_resolution(self):
+        """Missing timestamps → fall back to conflict_resolution='sdoc'."""
+        e = [_req("SYS-001", statement="Excel stmt")]
+        s = [_req("SYS-001", statement="SDoc stmt")]
+        ex_upd, _, _ = compute_sync(e, s, _mapping_with_ts(conflict_resolution="sdoc"))
+        assert ex_upd[0].statement == "SDoc stmt"
+
+    def test_field_direction_overrides_timestamp(self):
+        """field_directions override beats timestamp-based direction."""
+        e = [_req("SYS-001", title="Excel Title", statement="Excel stmt",
+                  custom_fields={"LAST_UPDATED": "2024-06-15"})]
+        s = [_req("SYS-001", title="SDoc Title", statement="SDoc stmt",
+                  custom_fields={"LAST_UPDATED": "2024-06-10"})]
+        # Excel is newer → Excel should win for statement, but TITLE is forced sdoc_to_excel
+        mapping = _mapping_with_ts(field_directions={"TITLE": "sdoc_to_excel"})
+        _, sdoc_upd, _ = compute_sync(e, s, mapping)
+        # TITLE: field_directions override → SDoc value kept
+        assert sdoc_upd[0].title == "SDoc Title"
+        # STATEMENT: no override, Excel newer → Excel value
+        assert sdoc_upd[0].statement == "Excel stmt"
+
+    def test_last_updated_not_configured_uses_conflict_resolution(self):
+        """Without last_updated_col, conflict_resolution is used as before."""
+        e = [_req("SYS-001", statement="Excel stmt")]
+        s = [_req("SYS-001", statement="SDoc stmt")]
+        mapping = _mapping(conflict_resolution="sdoc")
+        ex_upd, _, _ = compute_sync(e, s, mapping)
+        assert ex_upd[0].statement == "SDoc stmt"
 
 
 # ---------------------------------------------------------------------------

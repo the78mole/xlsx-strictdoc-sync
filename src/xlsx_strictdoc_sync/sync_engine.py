@@ -37,11 +37,27 @@ Only relevant when ``sync_direction = "both"``::
 
 Keys are **SDoc grammar field names** (matching the grammar element defined
 for the section).  Values are ``"excel_to_sdoc"`` or ``"sdoc_to_excel"``.
+
+Timestamp-based conflict resolution
+-------------------------------------
+When ``last_updated_col`` is set in the section config and
+``sync_direction = "both"``, the sync engine compares the per-row
+``last_updated`` timestamps stored in that column.  The side whose timestamp
+is **newer** wins for every field that has no explicit ``field_directions``
+override.  If timestamps are equal, missing, or cannot be parsed, the static
+``conflict_resolution`` setting (``"excel"`` or ``"sdoc"``) is used as the
+final tiebreaker::
+
+    last_updated_col = "Last Updated"   # Excel column that stores timestamps
+
+    [SYS_REQS.extra_cols]
+    Last Updated = "LAST_UPDATED"       # maps the column to the SDoc field name
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from .config_manager import (
     CONFLICT_EXCEL,
@@ -204,12 +220,35 @@ def _merge_pair(
 ) -> tuple[Requirement, Requirement]:
     """Merge a matched pair (same UID) applying per-field direction rules.
 
+    When :attr:`~.config_manager.SectionMapping.last_updated_col` is
+    configured, the side with the newer timestamp wins for all fields that
+    have no explicit :attr:`~.config_manager.SectionMapping.field_directions`
+    override.  Falls back to
+    :attr:`~.config_manager.SectionMapping.conflict_resolution` when the
+    timestamps are equal, missing, or cannot be parsed.
+
     Returns:
         ``(merged_for_sdoc, merged_for_excel)`` – the desired state on each
         target for this requirement.
     """
     fd = mapping.field_directions
     prefer_excel = mapping.conflict_resolution == CONFLICT_EXCEL
+
+    # Timestamp-based tiebreaker: compare last_updated fields when configured.
+    # Returns True when Excel is newer, False when SDoc is newer, None when
+    # equal / undetermined – in which case conflict_resolution applies.
+    ts_excel_newer: bool | None = _compare_timestamps(
+        excel_req.custom_fields.get(mapping.last_updated_sdoc_field, ""),
+        sdoc_req.custom_fields.get(mapping.last_updated_sdoc_field, ""),
+    ) if mapping.last_updated_sdoc_field else None
+    # When timestamps are available, let them act as the tiebreaker; only
+    # fall back to the static conflict_resolution when they are equal/missing.
+    if ts_excel_newer is True:
+        ts_prefer_excel: bool = True
+    elif ts_excel_newer is False:
+        ts_prefer_excel = False
+    else:
+        ts_prefer_excel = prefer_excel
 
     def _for_sdoc(field_name: str, excel_val: str, sdoc_val: str) -> str:
         """Value that the SDoc side should have for *field_name*."""
@@ -224,8 +263,8 @@ def _merge_pair(
             return excel_val
         if effective_dir == DIRECTION_SDOC_TO_EXCEL:
             return sdoc_val
-        # both + no override → conflict_resolution
-        return excel_val if prefer_excel else sdoc_val
+        # both + no override → timestamp tiebreaker, then conflict_resolution
+        return excel_val if ts_prefer_excel else sdoc_val
 
     def _for_excel(field_name: str, excel_val: str, sdoc_val: str) -> str:
         """Value that the Excel side should have for *field_name*."""
@@ -239,8 +278,8 @@ def _merge_pair(
             return sdoc_val
         if effective_dir == DIRECTION_EXCEL_TO_SDOC:
             return excel_val
-        # both + no override → conflict_resolution
-        return excel_val if prefer_excel else sdoc_val
+        # both + no override → timestamp tiebreaker, then conflict_resolution
+        return excel_val if ts_prefer_excel else sdoc_val
 
     # --- TITLE ---
     title_s = _for_sdoc("TITLE", excel_req.title, sdoc_req.title)
@@ -307,6 +346,42 @@ def _resolve_direction(section_dir: str, override: str | None) -> str:
             f"Invalid direction '{override}'. Must be one of {sorted(VALID_DIRECTIONS)}."
         )
     return override
+
+
+def _compare_timestamps(excel_ts: str, sdoc_ts: str) -> bool | None:
+    """Compare two last-updated timestamp strings.
+
+    Returns ``True`` when the Excel timestamp is strictly newer, ``False``
+    when the SDoc timestamp is strictly newer, and ``None`` when the
+    relationship cannot be determined (equal, missing, or unparseable).
+
+    Both values are first tried as :func:`datetime.fromisoformat` strings.
+    If parsing fails the raw strings are compared lexicographically (which
+    gives correct ordering for ISO-8601 date strings even without full
+    parsing).
+    """
+    if not excel_ts and not sdoc_ts:
+        return None
+    if not excel_ts:
+        return False  # SDoc has a timestamp, Excel does not → SDoc is newer
+    if not sdoc_ts:
+        return True  # Excel has a timestamp, SDoc does not → Excel is newer
+
+    try:
+        e_dt = datetime.fromisoformat(excel_ts)
+        s_dt = datetime.fromisoformat(sdoc_ts)
+        if e_dt > s_dt:
+            return True
+        if s_dt > e_dt:
+            return False
+        return None  # exactly equal
+    except (ValueError, TypeError):
+        # Fall back to lexicographic comparison (works for YYYY-MM-DD strings)
+        if excel_ts > sdoc_ts:
+            return True
+        if sdoc_ts > excel_ts:
+            return False
+        return None
 
 
 def _requirements_equal(a: Requirement, b: Requirement) -> bool:
