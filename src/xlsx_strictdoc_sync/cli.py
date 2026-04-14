@@ -4,15 +4,20 @@ Sub-commands
 ------------
 ``sync``
     Synchronize requirements between an Excel workbook and ``.sdoc`` files.
-    By default the Excel workbook is the authoritative source (Excel → SDoc).
+    Supports three directions (``--direction`` flag):
+
+    * ``excel_to_sdoc`` *(default)* – Excel → SDoc only.
+    * ``sdoc_to_excel`` – SDoc → Excel only.
+    * ``both`` – Bidirectional: new UIDs propagate to both sides; existing
+      UIDs are merged field-by-field according to
+      ``[SECTION.field_directions]`` in the config.
 
 ``init-config``
-    Scan an Excel file and generate a ``reqsync.toml`` template that guesses
-    the section mappings from sheet/table names and header rows.
+    Scan an Excel file and generate a ``reqsync.toml`` template.
 
 ``generate-grammar``
-    Read a ``reqsync.toml`` and write standalone ``.sdoc`` grammar files for
-    each section.
+    Read a ``reqsync.toml`` and write ``.sdoc`` grammar files for each
+    section.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .config_manager import generate_config_template, load_config
+from .config_manager import VALID_DIRECTIONS, generate_config_template, load_config
 from .excel_engine import ExcelEngine, ExcelEngineError
 from .models import Requirement
 from .sdoc_engine import (
@@ -34,6 +39,7 @@ from .sdoc_engine import (
     update_document,
     write_sdoc,
 )
+from .sync_engine import SyncResult, compute_sync
 
 
 # ---------------------------------------------------------------------------
@@ -71,17 +77,34 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="reqsync",
         description="Synchronize requirements between Excel and StrictDoc (.sdoc) files.",
     )
-    parser.add_argument(
-        "--version", action="version", version=f"reqsync {__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"reqsync {__version__}")
 
     sub = parser.add_subparsers(title="commands", metavar="<command>")
 
     # ---- sync ----
     sync_p = sub.add_parser(
         "sync",
-        help="Synchronize requirements (Excel → SDoc by default).",
-        description="Read requirements from Excel and write them to .sdoc files.",
+        help="Synchronize requirements (Excel <-> SDoc).",
+        description=(
+            "Read requirements from Excel and/or SDoc and synchronize them "
+            "according to the configured direction and field-level overrides."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+direction values:
+  excel_to_sdoc  Excel is the source of truth (default when not in config).
+  sdoc_to_excel  SDoc is the source of truth.
+  both           Bidirectional: new UIDs propagate to both sides; field-level
+                 overrides in [SECTION.field_directions] control per-field
+                 authority.  Use --prefer-sdoc to make SDoc win for fields
+                 with no specific override.
+
+examples:
+  reqsync sync                          # uses reqsync.toml, section default directions
+  reqsync sync --direction both         # force bidirectional for all sections
+  reqsync sync --direction both --prefer-sdoc
+  reqsync sync --section SYS_REQS --dry-run
+""",
     )
     sync_p.add_argument(
         "config",
@@ -96,6 +119,26 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Sync only this section (repeatable). Defaults to all sections.",
+    )
+    sync_p.add_argument(
+        "--direction",
+        choices=sorted(VALID_DIRECTIONS),
+        default=None,
+        metavar="DIR",
+        help=(
+            "Override sync direction for all selected sections "
+            "(both | excel_to_sdoc | sdoc_to_excel)."
+        ),
+    )
+    sync_p.add_argument(
+        "--prefer-sdoc",
+        action="store_true",
+        default=False,
+        help=(
+            "When --direction both is used and a field has no specific "
+            "field_directions override, prefer the SDoc value over Excel "
+            "(default: Excel wins)."
+        ),
     )
     sync_p.add_argument(
         "--dry-run",
@@ -150,9 +193,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    """Synchronize requirements from Excel into .sdoc files."""
+    """Synchronize requirements using the configured or overridden direction."""
     config = load_config(args.config)
-    excel_path = Path(config.excel_file)
 
     sections = config.sections
     if args.sections:
@@ -166,35 +208,63 @@ def cmd_sync(args: argparse.Namespace) -> int:
             )
             return 1
 
-    with ExcelEngine(excel_path) as eng:
-        for mapping in sections:
-            print(f"  [{mapping.name}] Reading from Excel …")
-            requirements: list[Requirement] = eng.read_requirements(mapping)
-            print(f"  [{mapping.name}] Found {len(requirements)} requirement(s).")
+    results: list[SyncResult] = []
 
+    with ExcelEngine(config.excel_file) as eng:
+        for mapping in sections:
+            # Apply --prefer-sdoc at runtime by patching conflict_resolution
+            if args.prefer_sdoc:
+                from dataclasses import replace
+                mapping = replace(mapping, conflict_resolution="sdoc")
+
+            eff_dir = args.direction or mapping.sync_direction
+            print(f"  [{mapping.name}] Syncing (direction={eff_dir}) ...")
+
+            # --- Read current state ---
+            excel_reqs: list[Requirement] = eng.read_requirements(mapping)
+            sdoc_reqs: list[Requirement] = []
             sdoc_path = Path(mapping.sdoc_file)
             if sdoc_path.exists():
-                print(f"  [{mapping.name}] Updating existing {sdoc_path} …")
                 doc = read_sdoc(sdoc_path)
-                doc = update_document(doc, requirements, mapping)
-            else:
-                print(f"  [{mapping.name}] Creating new {sdoc_path} …")
-                doc = requirements_to_document(
-                    requirements,
-                    title=mapping.name.replace("_", " ").title(),
-                    mapping=mapping,
-                )
+                sdoc_reqs = document_to_requirements(doc, mapping.grammar_tag)
+
+            # --- Compute desired post-sync state ---
+            excel_updates, sdoc_updates, sync_result = compute_sync(
+                excel_reqs=excel_reqs,
+                sdoc_reqs=sdoc_reqs,
+                mapping=mapping,
+                direction_override=args.direction,
+            )
 
             if args.dry_run:
-                from strictdoc.backend.sdoc.writer import SDWriter
-                from strictdoc.core.project_config import ProjectConfig
-
-                print(f"  [{mapping.name}] [dry-run] Output for {sdoc_path}:")
-                writer = SDWriter(ProjectConfig())
-                print(writer.write(doc))
+                _print_dry_run(mapping, excel_updates, sdoc_updates)
             else:
-                write_sdoc(doc, sdoc_path)
-                print(f"  [{mapping.name}] Written → {sdoc_path}")
+                # --- Write SDoc ---
+                if sdoc_updates:
+                    if sdoc_path.exists():
+                        doc = read_sdoc(sdoc_path)
+                        doc = update_document(doc, sdoc_updates, mapping)
+                    else:
+                        doc = requirements_to_document(
+                            sdoc_updates,
+                            title=mapping.name.replace("_", " ").title(),
+                            mapping=mapping,
+                        )
+                    write_sdoc(doc, sdoc_path)
+
+                # --- Write Excel ---
+                if excel_updates:
+                    eng.write_requirements(excel_updates, mapping)
+
+            results.append(sync_result)
+
+        # Save Excel once after all sections if any Excel changes were made
+        if not args.dry_run and any(r.excel_added + r.excel_updated > 0 for r in results):
+            eng.save()
+
+    # Print summary
+    for r in results:
+        print(f"  {r.summary()}")
 
     return 0
 
@@ -211,8 +281,7 @@ def cmd_init_config(args: argparse.Namespace) -> int:
     section_descriptors: list[dict[str, object]] = []
 
     if tables:
-        # Prefer tables over plain sheets when both exist
-        for table_name, sheet_name in tables.items():
+        for table_name in tables:
             safe_name = _make_section_name(table_name)
             section_descriptors.append(
                 {
@@ -246,10 +315,7 @@ def cmd_init_config(args: argparse.Namespace) -> int:
     )
 
     if output_path.exists():
-        print(
-            f"Warning: '{output_path}' already exists – overwriting.",
-            file=sys.stderr,
-        )
+        print(f"Warning: '{output_path}' already exists - overwriting.", file=sys.stderr)
 
     output_path.write_text(toml_content, encoding="utf-8")
     print(f"Config written to: {output_path}")
@@ -266,10 +332,9 @@ def cmd_generate_grammar(args: argparse.Namespace) -> int:
     for mapping in config.sections:
         title = f"{mapping.name.replace('_', ' ').title()} Grammar"
         content = generate_grammar_sdoc(title=title, mapping=mapping)
-
         out_file = output_dir / f"{mapping.name.lower()}_grammar.sdoc"
         out_file.write_text(content, encoding="utf-8")
-        print(f"  [{mapping.name}] Grammar written → {out_file}")
+        print(f"  [{mapping.name}] Grammar written -> {out_file}")
 
     return 0
 
@@ -277,6 +342,32 @@ def cmd_generate_grammar(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _print_dry_run(
+    mapping: object,
+    excel_updates: list[Requirement],
+    sdoc_updates: list[Requirement],
+) -> None:
+    from strictdoc.backend.sdoc.writer import SDWriter
+    from strictdoc.core.project_config import ProjectConfig
+
+    name = getattr(mapping, "name", "?")
+    if sdoc_updates:
+        print(f"  [{name}] [dry-run] Would write {len(sdoc_updates)} req(s) to SDoc:")
+        doc = requirements_to_document(
+            sdoc_updates,
+            title=f"[dry-run] {name}",
+            mapping=mapping,
+        )
+        print(SDWriter(ProjectConfig()).write(doc))
+    if excel_updates:
+        print(
+            f"  [{name}] [dry-run] Would write {len(excel_updates)} req(s) to Excel "
+            f"(UIDs: {[r.uid for r in excel_updates]})."
+        )
+    if not sdoc_updates and not excel_updates:
+        print(f"  [{name}] [dry-run] Nothing to sync.")
 
 
 def _make_section_name(raw: str) -> str:

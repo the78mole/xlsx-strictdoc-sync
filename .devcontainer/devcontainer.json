@@ -1,0 +1,31 @@
+{
+  "name": "xlsx-strictdoc-sync Dev",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11-bullseye",
+  "features": {
+    "ghcr.io/devcontainers-contrib/features/apt-packages:1": {
+      "packages": "curl ca-certificates"
+    }
+  },
+  "postCreateCommand": "pip install uv && uv pip install --system -e '.[dev,docs]'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "tamasfe.even-better-toml",
+        "ms-python.debugpy"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        }
+      }
+    }
+  },
+  "remoteEnv": {
+    "PYTHONDONTWRITEBYTECODE": "1"
+  }
+}

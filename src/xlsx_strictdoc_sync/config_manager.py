@@ -14,6 +14,16 @@ else:
     except ImportError:
         import tomli as tomllib  # type: ignore[no-redef]
 
+# Valid direction string constants
+DIRECTION_EXCEL_TO_SDOC = "excel_to_sdoc"
+DIRECTION_SDOC_TO_EXCEL = "sdoc_to_excel"
+DIRECTION_BOTH = "both"
+VALID_DIRECTIONS = frozenset([DIRECTION_EXCEL_TO_SDOC, DIRECTION_SDOC_TO_EXCEL, DIRECTION_BOTH])
+
+CONFLICT_EXCEL = "excel"
+CONFLICT_SDOC = "sdoc"
+VALID_CONFLICT_RESOLUTIONS = frozenset([CONFLICT_EXCEL, CONFLICT_SDOC])
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -38,6 +48,31 @@ class SectionMapping:
         grammar_tag: SDoc grammar element tag (default ``"REQUIREMENT"``).
         extra_cols: Mapping of Excel column header/letter → SDoc field name
             for fields beyond the standard three.
+        sync_direction: Overall sync direction for this section.
+
+            * ``"excel_to_sdoc"`` *(default)* – Excel is the source of truth.
+            * ``"sdoc_to_excel"`` – SDoc is the source of truth.
+            * ``"both"`` – Bidirectional: new items flow from each side; for
+              fields that exist on both sides the winner is determined by
+              :attr:`conflict_resolution` unless overridden in
+              :attr:`field_directions`.
+
+        conflict_resolution: Tiebreaker when ``sync_direction="both"`` and a
+            field has no entry in :attr:`field_directions`.
+
+            * ``"excel"`` *(default)* – Excel value wins.
+            * ``"sdoc"`` – SDoc value wins.
+
+        field_directions: Per-field direction overrides (only meaningful when
+            ``sync_direction="both"``).  Keys are **SDoc grammar field names**
+            (e.g. ``"STATEMENT"``, ``"TITLE"``, ``"SAFETY_LEVEL"``).  Values
+            are ``"excel_to_sdoc"`` or ``"sdoc_to_excel"``.
+
+            Example in TOML::
+
+                [SYS_REQS.field_directions]
+                TITLE     = "sdoc_to_excel"    # SDoc is authoritative for titles
+                STATEMENT = "excel_to_sdoc"    # Excel is authoritative for text
     """
 
     name: str
@@ -50,6 +85,9 @@ class SectionMapping:
     relations_col: str = ""
     grammar_tag: str = "REQUIREMENT"
     extra_cols: dict[str, str] = field(default_factory=dict)
+    sync_direction: str = DIRECTION_EXCEL_TO_SDOC
+    conflict_resolution: str = CONFLICT_EXCEL
+    field_directions: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.mode not in ("table", "legacy"):
@@ -60,6 +98,22 @@ class SectionMapping:
             raise ValueError(f"[{self.name}] 'anchor' must not be empty.")
         if not self.uid_col:
             raise ValueError(f"[{self.name}] 'uid_col' must not be empty.")
+        if self.sync_direction not in VALID_DIRECTIONS:
+            raise ValueError(
+                f"[{self.name}] 'sync_direction' must be one of "
+                f"{sorted(VALID_DIRECTIONS)}, got '{self.sync_direction}'."
+            )
+        if self.conflict_resolution not in VALID_CONFLICT_RESOLUTIONS:
+            raise ValueError(
+                f"[{self.name}] 'conflict_resolution' must be 'excel' or 'sdoc', "
+                f"got '{self.conflict_resolution}'."
+            )
+        for fname, fdir in self.field_directions.items():
+            if fdir not in (DIRECTION_EXCEL_TO_SDOC, DIRECTION_SDOC_TO_EXCEL):
+                raise ValueError(
+                    f"[{self.name}] field_directions['{fname}'] must be "
+                    f"'excel_to_sdoc' or 'sdoc_to_excel', got '{fdir}'."
+                )
 
 
 @dataclass
@@ -120,6 +174,7 @@ def load_config(path: str | Path) -> Config:
             continue
         try:
             extra_cols: dict[str, str] = section_data.get("extra_cols", {})
+            field_directions: dict[str, str] = section_data.get("field_directions", {})
             mapping = SectionMapping(
                 name=section_name,
                 sdoc_file=section_data["sdoc_file"],
@@ -131,6 +186,9 @@ def load_config(path: str | Path) -> Config:
                 relations_col=section_data.get("relations_col", ""),
                 grammar_tag=section_data.get("grammar_tag", "REQUIREMENT"),
                 extra_cols=extra_cols,
+                sync_direction=section_data.get("sync_direction", DIRECTION_EXCEL_TO_SDOC),
+                conflict_resolution=section_data.get("conflict_resolution", CONFLICT_EXCEL),
+                field_directions=field_directions,
             )
         except KeyError as exc:
             raise KeyError(f"[{section_name}] Missing required key: {exc}") from exc
@@ -163,18 +221,26 @@ def generate_config_template(
     ]
 
     for sec in sections:
+        sname = sec['name']
         lines += [
-            f"[{sec['name']}]",
-            f"sdoc_file  = \"{sec.get('sdoc_file', sec['name'].lower() + '.sdoc')}\"",
-            f"mode       = \"{sec.get('mode', 'legacy')}\"",
-            f"anchor     = \"{sec.get('anchor', '')}\"",
-            f"uid_col    = \"{sec.get('uid_col', 'A')}\"",
-            f"title_col  = \"{sec.get('title_col', 'B')}\"",
-            f"statement_col = \"{sec.get('statement_col', 'C')}\"",
-            "# relations_col = \"D\"",
-            "# grammar_tag   = \"REQUIREMENT\"",
-            "# [SYS_REQS.extra_cols]",
+            f"[{sname}]",
+            f"sdoc_file         = \"{sec.get('sdoc_file', sname.lower() + '.sdoc')}\"",
+            f"mode              = \"{sec.get('mode', 'legacy')}\"",
+            f"anchor            = \"{sec.get('anchor', '')}\"",
+            f"uid_col           = \"{sec.get('uid_col', 'A')}\"",
+            f"title_col         = \"{sec.get('title_col', 'B')}\"",
+            f"statement_col     = \"{sec.get('statement_col', 'C')}\"",
+            "# relations_col   = \"D\"",
+            "# grammar_tag     = \"REQUIREMENT\"",
+            "# sync_direction  = \"excel_to_sdoc\"  # excel_to_sdoc | sdoc_to_excel | both",
+            "# conflict_resolution = \"excel\"      # excel | sdoc (tiebreaker for 'both' mode)",
+            "",
+            f"# [{sname}.extra_cols]",
             "# Safety_Level = \"SAFETY_LEVEL\"",
+            "",
+            f"# [{sname}.field_directions]",
+            "# TITLE     = \"sdoc_to_excel\"   # SDoc is authoritative for this field",
+            "# STATEMENT = \"excel_to_sdoc\"   # Excel is authoritative for this field",
             "",
         ]
 

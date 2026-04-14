@@ -1,0 +1,52 @@
+# reqsync.toml – example configuration
+# See: https://the78mole.github.io/xlsx-strictdoc-sync/configuration/
+
+[global]
+excel_file = "requirements.xlsx"
+
+# ── System Requirements (bidirectional, table mode) ───────────────────────
+[SYS_REQS]
+sdoc_file         = "docs/sys_reqs.sdoc"
+mode              = "table"
+anchor            = "SYS_Requirements"     # Excel table display name
+uid_col           = "UID"
+title_col         = "Title"
+statement_col     = "Statement"
+relations_col     = "Derived From"         # semicolon-separated parent UIDs
+sync_direction    = "both"
+conflict_resolution = "excel"              # Excel wins for unspecified fields
+
+# Field-level direction overrides:
+# TITLE is maintained in SDoc (e.g. reviewed/approved title)
+# STATEMENT is maintained in Excel (engineers write requirements there)
+[SYS_REQS.field_directions]
+TITLE     = "sdoc_to_excel"
+STATEMENT = "excel_to_sdoc"
+
+# ── Software Requirements (Excel → SDoc, table mode) ─────────────────────
+[SW_REQS]
+sdoc_file         = "docs/sw_reqs.sdoc"
+mode              = "table"
+anchor            = "SW_Requirements"
+uid_col           = "UID"
+title_col         = "Title"
+statement_col     = "Requirement Statement"
+relations_col     = "Parent SYS Req"
+sync_direction    = "excel_to_sdoc"        # default: Excel is authoritative
+
+# Extra fields beyond the standard three
+[SW_REQS.extra_cols]
+Safety_Level = "SAFETY_LEVEL"
+Rationale    = "RATIONALE"
+
+# ── Hardware Requirements (Excel → SDoc, legacy sheet) ────────────────────
+[HW_REQS]
+sdoc_file         = "docs/hw_reqs.sdoc"
+mode              = "legacy"               # plain sheet, no formatted table
+anchor            = "HW Requirements"      # sheet name
+uid_col           = "A"                    # A1-style column letters
+title_col         = "B"
+statement_col     = "C"
+relations_col     = "D"
+sync_direction    = "excel_to_sdoc"
+grammar_tag       = "HW_REQUIREMENT"       # custom grammar tag

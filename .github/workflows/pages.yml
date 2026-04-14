@@ -1,0 +1,84 @@
+name: Docs (GitHub Pages)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Required for artifact-based Pages deployment
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Determine semantic version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute semantic version
+        id: semver
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: "v"
+          major_pattern: "(MAJOR)"
+          minor_pattern: "(MINOR)"
+          version_format: "${major}.${minor}.${patch}"
+          bump_each_commit: false
+          search_commit_body: false
+
+  build-docs:
+    name: Build MkDocs site
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install docs dependencies
+        run: pip install mkdocs mkdocs-material
+
+      - name: Inject version into docs
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          sed -i "s/{{VERSION}}/${VERSION}/g" docs/index.md || true
+
+      - name: Build MkDocs site
+        run: mkdocs build --strict
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      # Artifact-based upload: NO gh-pages branch is used
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: build-docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
