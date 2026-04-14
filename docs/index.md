@@ -1,25 +1,30 @@
-# xlsx-strictdoc-sync
-
-**Version {{VERSION}}** — Synchronize requirements between Microsoft Excel and StrictDoc (`.sdoc`) files.
-
-[![CI](https://github.com/the78mole/xlsx-strictdoc-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/the78mole/xlsx-strictdoc-sync/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/xlsx-strictdoc-sync)](https://pypi.org/project/xlsx-strictdoc-sync/)
-
 ---
-
-## What is it?
-
-`xlsx-strictdoc-sync` (`reqsync`) is a Python command-line tool that bridges the gap between
-flexible Excel-based requirement tracking and formal [StrictDoc](https://strictdoc.readthedocs.io/)
-`.sdoc` files. It supports:
-
-- **Excel → SDoc** — migrate or update `.sdoc` files from an Excel workbook.
-- **SDoc → Excel** — push changes back from SDoc into Excel.
-- **Bidirectional sync** — propagate new UIDs to both sides; control which system
-  is authoritative for each field via `field_directions` overrides.
-- **Table mode** — target named Excel tables (ListObjects) by display name.
-- **Legacy mode** — target plain worksheets with A1-style column references.
-- **Custom grammars** — map any Excel column to a custom SDoc grammar field.
+home: true
+title: xlsx-strictdoc-sync
+heroText: xlsx-strictdoc-sync
+tagline: Synchronize requirements between Microsoft Excel and StrictDoc (.sdoc) files — with bidirectional sync and per-field direction overrides.
+actions:
+  - text: Get Started
+    link: /getting-started
+    type: primary
+  - text: CLI Reference
+    link: /cli-reference
+    type: secondary
+features:
+  - title: Bidirectional Sync
+    details: Propagate new UIDs in both directions. Control which side is authoritative per-field via field_directions overrides.
+  - title: Excel Table & Legacy Mode
+    details: Target named Excel ListObjects by display name (table mode) or plain worksheets with A1 column references (legacy mode).
+  - title: Custom Grammars
+    details: Map any Excel column to a StrictDoc grammar field — go beyond the standard UID / TITLE / STATEMENT fields.
+  - title: Non-destructive & Idempotent
+    details: The sync never writes back unless the merged value actually differs. Repeated runs produce no spurious changes.
+  - title: Auto-config Generation
+    details: Run `reqsync init-config requirements.xlsx` to generate a reqsync.toml template from an existing workbook.
+  - title: Installable via uv
+    details: Ship as a proper Python package — install with `uv tool install xlsx-strictdoc-sync` and use from any project.
+footer: MIT License | Copyright © the78mole
+---
 
 ## Quick start
 
@@ -37,12 +42,24 @@ reqsync sync
 reqsync sync --direction both --prefer-sdoc
 ```
 
-## Navigation
+## Bidirectional sync with field exceptions
+
+```toml
+[SYS_REQS]
+sync_direction      = "both"
+conflict_resolution = "excel"      # Excel wins for unspecified fields
+
+[SYS_REQS.field_directions]
+TITLE     = "sdoc_to_excel"        # SDoc owns the approved title
+STATEMENT = "excel_to_sdoc"        # Engineers write statements in Excel
+```
+
+## Pages
 
 | Page | Description |
 |------|-------------|
-| [Getting Started](getting-started.md) | Installation and first sync |
-| [Configuration](configuration.md) | Full `reqsync.toml` reference |
-| [Bidirectional Sync](bidirectional-sync.md) | Field-level direction overrides |
-| [CLI Reference](cli-reference.md) | All commands and flags |
-| [Architecture](architecture.md) | Module design and data flow |
+| [Getting Started](/xlsx-strictdoc-sync/getting-started) | Installation and first sync |
+| [Configuration](/xlsx-strictdoc-sync/configuration) | Full `reqsync.toml` reference |
+| [Bidirectional Sync](/xlsx-strictdoc-sync/bidirectional-sync) | Field-level direction overrides |
+| [CLI Reference](/xlsx-strictdoc-sync/cli-reference) | All commands and flags |
+| [Architecture](/xlsx-strictdoc-sync/architecture) | Module design and data flow |

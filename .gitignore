@@ -33,8 +33,14 @@ coverage.xml
 htmlcov/
 .tox/
 
-# MkDocs
-site/
+# MkDocs (removed – docs now use VuePress)
+# site/
+
+# VuePress
+docs/.vuepress/dist/
+docs/.vuepress/.temp/
+docs/.vuepress/.cache/
+node_modules/
 
 # IDE / editor
 .vscode/settings.json

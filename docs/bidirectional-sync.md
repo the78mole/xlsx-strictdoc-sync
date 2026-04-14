@@ -34,9 +34,10 @@ For each field (TITLE, STATEMENT, RELATIONS, custom fields):
 | No field override, `conflict_resolution = "excel"` (default) | Excel wins both sides |
 | No field override, `conflict_resolution = "sdoc"` | SDoc wins both sides |
 
-!!! tip "No unnecessary writes"
-    If the merged value equals what a target already has, no write is
-    performed for that requirement.  The sync is idempotent.
+:::tip No unnecessary writes
+If the merged value equals what a target already has, no write is
+performed for that requirement.  The sync is idempotent.
+:::
 
 ## CLI overrides
 

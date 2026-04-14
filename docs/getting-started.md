@@ -7,17 +7,17 @@
 
 ## Installation
 
-=== "uv (recommended)"
+**With uv (recommended):**
 
-    ```bash
-    uv tool install xlsx-strictdoc-sync
-    ```
+```bash
+uv tool install xlsx-strictdoc-sync
+```
 
-=== "pip"
+**With pip:**
 
-    ```bash
-    pip install xlsx-strictdoc-sync
-    ```
+```bash
+pip install xlsx-strictdoc-sync
+```
 
 ## First sync in 3 steps
 

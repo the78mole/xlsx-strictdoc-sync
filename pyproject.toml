@@ -30,10 +30,9 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.4",
 ]
-docs = [
-    "mkdocs>=1.5",
-    "mkdocs-material>=9.5",
-]
+# Documentation is built with VuePress 2 (Node.js).
+# See package.json and docs/.vuepress/config.ts.
+# No Python docs dependencies required.
 
 [project.scripts]
 reqsync = "xlsx_strictdoc_sync.cli:main"
