@@ -1,0 +1,99 @@
+name: Build & Publish
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write   # to create tags
+  id-token: write   # for PyPI trusted publishing
+
+jobs:
+  version:
+    name: Determine semantic version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+      version_tag: ${{ steps.semver.outputs.version_tag }}
+      is_tagged: ${{ steps.semver.outputs.is_tagged }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute semantic version
+        id: semver
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: "v"
+          major_pattern: "(MAJOR)"
+          minor_pattern: "(MINOR)"
+          version_format: "${major}.${minor}.${patch}"
+          bump_each_commit: false
+          search_commit_body: false
+
+  build:
+    name: Build distribution
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install uv hatchling
+
+      - name: Stamp version into package
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" \
+            src/xlsx_strictdoc_sync/__init__.py
+
+      - name: Build wheel and sdist
+        run: python -m hatchling build
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/xlsx-strictdoc-sync
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (trusted publishing / OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  tag:
+    name: Create git tag
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push version tag
+        env:
+          TAG: ${{ needs.version.outputs.version_tag }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG" || echo "Tag $TAG already exists – skipping"
+          git push origin "$TAG" || echo "Push skipped"
